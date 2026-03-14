@@ -4,6 +4,21 @@
 set -e
 set -o pipefail
 
+# Detect package manager (Alpine uses apk, Debian uses apt-get)
+detect_package_manager() {
+    if command -v apk &> /dev/null; then
+        echo "apk"
+    elif command -v apt-get &> /dev/null; then
+        echo "apt"
+    else
+        bashio::log.error "No supported package manager found (apk or apt-get)"
+        exit 1
+    fi
+}
+
+# Package manager detection (set once at startup)
+PKG_MANAGER=""
+
 # Initialize environment for Claude Code CLI using /data (HA best practice)
 init_environment() {
     # Use /data exclusively - guaranteed writable by HA Supervisor
@@ -99,10 +114,24 @@ migrate_legacy_auth_files() {
 # Install required tools
 install_tools() {
     bashio::log.info "Installing additional tools..."
-    if ! apk add --no-cache ttyd jq curl tmux; then
-        bashio::log.error "Failed to install required tools"
-        exit 1
+
+    if [ "$PKG_MANAGER" = "apk" ]; then
+        # Alpine Linux
+        if ! apk add --no-cache ttyd jq curl tmux; then
+            bashio::log.error "Failed to install required tools"
+            exit 1
+        fi
+    else
+        # Debian/Ubuntu
+        if ! apt-get update && apt-get install -y --no-install-recommends ttyd jq curl tmux; then
+            bashio::log.error "Failed to install required tools"
+            exit 1
+        fi
+        # Clean up apt cache
+        apt-get clean
+        rm -rf /var/lib/apt/lists/*
     fi
+
     bashio::log.info "Tools installed successfully"
 }
 
@@ -111,16 +140,16 @@ install_persistent_packages() {
     bashio::log.info "Checking for persistent packages..."
 
     local persist_config="/data/persistent-packages.json"
-    local apk_packages=""
+    local system_packages=""
     local pip_packages=""
 
-    # Collect APK packages from Home Assistant config
+    # Collect system packages from Home Assistant config
     if bashio::config.has_value 'persistent_apk_packages'; then
-        local config_apk
-        config_apk=$(bashio::config 'persistent_apk_packages')
-        if [ -n "$config_apk" ] && [ "$config_apk" != "null" ]; then
-            apk_packages="$config_apk"
-            bashio::log.info "Found APK packages in config: $apk_packages"
+        local config_pkg
+        config_pkg=$(bashio::config 'persistent_apk_packages')
+        if [ -n "$config_pkg" ] && [ "$config_pkg" != "null" ]; then
+            system_packages="$config_pkg"
+            bashio::log.info "Found system packages in config: $system_packages"
         fi
     fi
 
@@ -138,11 +167,11 @@ install_persistent_packages() {
     if [ -f "$persist_config" ]; then
         bashio::log.info "Found local persistent packages config"
 
-        # Get APK packages from local config
-        local local_apk
-        local_apk=$(jq -r '.apk_packages | join(" ")' "$persist_config" 2>/dev/null || echo "")
-        if [ -n "$local_apk" ]; then
-            apk_packages="$apk_packages $local_apk"
+        # Get system packages from local config
+        local local_pkg
+        local_pkg=$(jq -r '.apk_packages | join(" ")' "$persist_config" 2>/dev/null || echo "")
+        if [ -n "$local_pkg" ]; then
+            system_packages="$system_packages $local_pkg"
         fi
 
         # Get pip packages from local config
@@ -154,17 +183,27 @@ install_persistent_packages() {
     fi
 
     # Trim whitespace and remove duplicates
-    apk_packages=$(echo "$apk_packages" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
+    system_packages=$(echo "$system_packages" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
     pip_packages=$(echo "$pip_packages" | tr ' ' '\n' | sort -u | tr '\n' ' ' | xargs)
 
-    # Install APK packages
-    if [ -n "$apk_packages" ]; then
-        bashio::log.info "Installing persistent APK packages: $apk_packages"
+    # Install system packages
+    if [ -n "$system_packages" ]; then
+        bashio::log.info "Installing persistent system packages: $system_packages"
         # shellcheck disable=SC2086
-        if apk add --no-cache $apk_packages; then
-            bashio::log.info "APK packages installed successfully"
+        if [ "$PKG_MANAGER" = "apk" ]; then
+            if apk add --no-cache $system_packages; then
+                bashio::log.info "System packages installed successfully"
+            else
+                bashio::log.warning "Some system packages failed to install"
+            fi
         else
-            bashio::log.warning "Some APK packages failed to install"
+            if apt-get update && apt-get install -y --no-install-recommends $system_packages; then
+                bashio::log.info "System packages installed successfully"
+                apt-get clean
+                rm -rf /var/lib/apt/lists/*
+            else
+                bashio::log.warning "Some system packages failed to install"
+            fi
         fi
     fi
 
@@ -179,7 +218,7 @@ install_persistent_packages() {
         fi
     fi
 
-    if [ -z "$apk_packages" ] && [ -z "$pip_packages" ]; then
+    if [ -z "$system_packages" ] && [ -z "$pip_packages" ]; then
         bashio::log.info "No persistent packages configured"
     fi
 }
@@ -346,6 +385,10 @@ run_health_check() {
 # Main execution
 main() {
     bashio::log.info "Initializing Claude Terminal add-on..."
+
+    # Detect package manager (Alpine=apk, Debian=apt)
+    PKG_MANAGER=$(detect_package_manager)
+    bashio::log.info "Detected package manager: $PKG_MANAGER"
 
     # Run diagnostics first (especially helpful for VirtualBox issues)
     run_health_check

@@ -116,17 +116,37 @@ install_tools() {
     bashio::log.info "Installing additional tools..."
 
     if [ "$PKG_MANAGER" = "apk" ]; then
-        # Alpine Linux
+        # Alpine Linux - ttyd is available in repos
         if ! apk add --no-cache ttyd jq curl tmux; then
             bashio::log.error "Failed to install required tools"
             exit 1
         fi
     else
-        # Debian/Ubuntu
-        if ! apt-get update && apt-get install -y --no-install-recommends ttyd jq curl tmux; then
+        # Debian/Ubuntu - install base packages first
+        apt-get update
+        if ! apt-get install -y --no-install-recommends jq curl tmux ca-certificates; then
             bashio::log.error "Failed to install required tools"
             exit 1
         fi
+
+        # ttyd is not in Debian repos, install from GitHub releases
+        bashio::log.info "Installing ttyd from GitHub releases..."
+        local arch
+        arch=$(uname -m)
+        local ttyd_arch
+        case "$arch" in
+            aarch64) ttyd_arch="aarch64" ;;
+            armv7l)  ttyd_arch="armhf" ;;
+            x86_64)  ttyd_arch="x86_64" ;;
+            *)       bashio::log.error "Unsupported architecture: $arch"; exit 1 ;;
+        esac
+
+        if ! curl -sL "https://github.com/tsl0922/ttyd/releases/latest/download/ttyd.${ttyd_arch}" -o /usr/local/bin/ttyd; then
+            bashio::log.error "Failed to download ttyd"
+            exit 1
+        fi
+        chmod +x /usr/local/bin/ttyd
+
         # Clean up apt cache
         apt-get clean
         rm -rf /var/lib/apt/lists/*

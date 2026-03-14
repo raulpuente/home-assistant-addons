@@ -1,7 +1,9 @@
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base:3.21
+  # ARM architectures use Debian (glibc) for Claude Code CLI compatibility
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+  armv7: ghcr.io/home-assistant/armv7-base-debian:bookworm
+  # AMD64 uses Alpine (works fine with musl on x86)
   amd64: ghcr.io/home-assistant/amd64-base:3.21
-  armv7: ghcr.io/home-assistant/armv7-base:3.21
 
 labels:
   org.opencontainers.image.title: "Home Assistant Add-on: Claude Terminal"

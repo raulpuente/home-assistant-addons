@@ -1,0 +1,45 @@
+ARG BUILD_FROM
+FROM ${BUILD_FROM}
+
+# Install system packages and development tools (Debian/glibc for ARM compatibility)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    curl \
+    nano \
+    nodejs \
+    npm \
+    python3 \
+    python3-pip \
+    python3-requests \
+    python3-aiohttp \
+    python3-yaml \
+    python3-bs4 \
+    git \
+    vim \
+    wget \
+    jq \
+    tree \
+    tmux \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install yq (not available in Debian repos, install from GitHub releases)
+RUN curl -sL "https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64" -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq
+
+# Install Claude Code CLI via npm (works with glibc on ARM)
+RUN npm install -g @anthropic-ai/claude-code@latest \
+    && npm cache clean --force
+
+# Create directory for Claude configuration and set working directory
+RUN mkdir -p /config/claude-config
+WORKDIR /config
+
+# Copy startup script and modular scripts
+COPY run.sh /run.sh
+COPY scripts/ /opt/scripts/
+RUN chmod +x /run.sh \
+    && chmod +x /opt/scripts/*.sh
+
+# Use exec form for better signal handling
+CMD ["/run.sh"]
